@@ -42,6 +42,8 @@ export type AccountState = {
   dailyStartingBalance: number;
   lastUpdated: string;
   payoutPending: boolean;
+  fundedAt?: string;
+  fundedBaseline?: number;
 };
 
 export type TradeLog = {

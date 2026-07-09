@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { defaultAccountConfig } from '../data/defaults';
-import type { RiskContext } from '../data/types';
+import { defaultAccountConfig, defaultAccountState } from '../data/defaults';
+import type { AccountState, RiskContext } from '../data/types';
+import { calculatePayoutEligibleProfit, promoteEvaluationAccount } from './accountPhase';
 import { calculateContractsAllowed, calculatePotentialLoss, calculateRiskPerContract, calculateStopPoints } from './contractSizing';
 import { calculateDrawdownRemaining } from './drawdownLogic';
 import { calculateNetPayout, calculatePayoutStatus } from './payoutLogic';
-import { calculateDailyRiskRemaining, calculateRecommendedRisk, calculateRiskMode, calculateTradeApproval } from './riskEngine';
+import { buildTradingStatus, calculateDailyRiskRemaining, calculateRecommendedRisk, calculateRiskMode, calculateTradeApproval } from './riskEngine';
 
 const baseCtx: RiskContext = {
   accountPhase: 'evaluation',
@@ -82,10 +83,26 @@ describe('RiskGuard acceptance calculations', () => {
   });
 
   it('detects payout availability', () => {
-    const ctx = { ...baseCtx, accountPhase: 'funded' as const, currentBalance: 26000, fundedProfit: 1000 };
-    expect(calculatePayoutStatus({ fundedProfit: 1000, maxPayoutAmount: 1000, payoutPending: false, payoutsTaken: 0, maxPayouts: 5 })).toBe('Available');
+    const ctx = { ...baseCtx, accountPhase: 'funded' as const, currentBalance: 27250, fundedProfit: 1000 };
+    expect(calculatePayoutStatus({ fundedProfit: 1000, maxPayoutAmount: 1000, payoutPending: false, payoutsTaken: 0, maxPayouts: 5, accountPhase: 'funded' })).toBe('Available');
     expect(calculateNetPayout(defaultAccountConfig.maxPayoutAmount, defaultAccountConfig.profitSplit)).toBe(900);
     expect(calculateRiskMode(ctx)).toBe('protection');
+  });
+
+  it('does not apply payout availability while still in evaluation', () => {
+    const ctx = { ...baseCtx, currentBalance: 26000, fundedProfit: 1000 };
+    expect(calculatePayoutStatus({ fundedProfit: 1000, maxPayoutAmount: 1000, payoutPending: false, payoutsTaken: 0, maxPayouts: 5, accountPhase: 'evaluation' })).toBe('Not ready');
+    expect(calculateRiskMode(ctx)).toBe('normal');
+  });
+
+  it('ignores stale payout pending state while still in evaluation', () => {
+    const ctx = { ...baseCtx, payoutPending: true };
+    const approval = calculateTradeApproval({ ctx, setup: { instrument: 'MNQ', direction: 'long', entry: 22000, stop: 21970 }, pointValue: 2 });
+
+    expect(calculatePayoutStatus({ fundedProfit: 0, maxPayoutAmount: 1000, payoutPending: true, payoutsTaken: 0, maxPayouts: 5, accountPhase: 'evaluation' })).toBe('Not ready');
+    expect(calculateRiskMode(ctx)).toBe('normal');
+    expect(buildTradingStatus(ctx)).toBe('TRADE ALLOWED');
+    expect(approval.approval).toBe('APPROVED');
   });
 
   it('reduces after a high-R trade', () => {
@@ -97,5 +114,74 @@ describe('RiskGuard acceptance calculations', () => {
   it('rejects zero stop size', () => {
     const result = calculateTradeApproval({ ctx: baseCtx, setup: { instrument: 'MNQ', direction: 'long', entry: 22000, stop: 22000 }, pointValue: 2 });
     expect(result.approval).toBe('REJECTED - INVALID INPUT');
+  });
+});
+
+describe('Eval-to-funded transition', () => {
+  const makeState = (currentBalance: number, overrides: Partial<AccountState> = {}): AccountState => ({
+    ...defaultAccountState,
+    startingBalance: 25000,
+    currentBalance,
+    highWatermark: Math.max(25000, currentBalance),
+    lastUpdated: '2026-07-09T00:00:00.000Z',
+    ...overrides
+  });
+
+  it('keeps evaluation accounts below the pass balance out of funded profit', () => {
+    const state = makeState(26249.99);
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, () => '2026-07-09T12:00:00.000Z');
+
+    expect(promoted.phase).toBe('evaluation');
+    expect(calculatePayoutEligibleProfit(promoted, defaultAccountConfig)).toBe(0);
+  });
+
+  it('promotes evaluation accounts at the pass balance with no payout-eligible profit yet', () => {
+    const state = makeState(26250);
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, () => '2026-07-09T12:00:00.000Z');
+
+    expect(promoted.phase).toBe('funded');
+    expect(promoted.fundedAt).toBe('2026-07-09T12:00:00.000Z');
+    expect(promoted.fundedBaseline).toBe(26250);
+    expect(calculatePayoutEligibleProfit(promoted, defaultAccountConfig)).toBe(0);
+  });
+
+  it('counts only post-target profit for funded payout eligibility', () => {
+    const state = makeState(27250, { phase: 'funded', fundedBaseline: 26250 });
+
+    expect(calculatePayoutEligibleProfit(state, defaultAccountConfig)).toBe(1000);
+    expect(calculatePayoutStatus({ fundedProfit: 1000, maxPayoutAmount: 1000, payoutPending: false, payoutsTaken: 0, maxPayouts: 5, accountPhase: 'funded' })).toBe('Available');
+  });
+
+  it('records the funded baseline when a balance update crosses the target', () => {
+    const state = makeState(26300);
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, () => '2026-07-09T12:00:00.000Z');
+
+    expect(promoted.phase).toBe('funded');
+    expect(promoted.fundedBaseline).toBe(26250);
+    expect(calculatePayoutEligibleProfit(promoted, defaultAccountConfig)).toBe(50);
+  });
+
+  it('does not auto-demote funded accounts that drop below the funded baseline', () => {
+    const state = makeState(26100, { phase: 'funded', fundedAt: '2026-07-09T12:00:00.000Z', fundedBaseline: 26250 });
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, () => '2026-07-09T13:00:00.000Z');
+
+    expect(promoted.phase).toBe('funded');
+    expect(promoted.fundedAt).toBe('2026-07-09T12:00:00.000Z');
+    expect(calculatePayoutEligibleProfit(promoted, defaultAccountConfig)).toBe(0);
+  });
+
+  it('uses the evaluation pass balance for old funded snapshots without a baseline', () => {
+    const state = makeState(27250, { phase: 'funded' });
+
+    expect(calculatePayoutEligibleProfit(state, defaultAccountConfig)).toBe(1000);
+  });
+
+  it('backfills missing funded baselines on old funded snapshots', () => {
+    const state = makeState(27250, { phase: 'funded' });
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, () => '2026-07-09T12:00:00.000Z');
+
+    expect(promoted.fundedBaseline).toBe(26250);
+    expect(promoted.fundedAt).toBeUndefined();
+    expect(calculatePayoutEligibleProfit(promoted, defaultAccountConfig)).toBe(1000);
   });
 });

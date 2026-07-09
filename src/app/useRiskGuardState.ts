@@ -1,27 +1,38 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { defaultAccountConfig, defaultAccountState } from '../data/defaults';
 import type { CloudSnapshot } from '../data/cloudSnapshot';
 import type { AccountConfig, AccountState, PayoutLog, RiskContext, TradeLog } from '../data/types';
+import { calculatePayoutEligibleProfit, promoteEvaluationAccount } from '../logic/accountPhase';
 import { calculateDailyStats, calculateMonthlyStats, calculateWeeklyStats } from '../logic/stats';
 import { STORAGE_KEYS } from '../storage/storageKeys';
 import { loadFromStorage, removeFromStorage, saveToStorage } from '../storage/localStorage';
 
 export function useRiskGuardState() {
   const [config, setConfig] = useState<AccountConfig>(() => loadFromStorage(STORAGE_KEYS.accountConfig, defaultAccountConfig));
-  const [accountState, setAccountState] = useState<AccountState>(() => loadFromStorage(STORAGE_KEYS.accountState, defaultAccountState));
+  const [accountState, setRawAccountState] = useState<AccountState>(() => promoteEvaluationAccount(loadFromStorage(STORAGE_KEYS.accountState, defaultAccountState), config));
   const [trades, setTrades] = useState<TradeLog[]>(() => loadFromStorage(STORAGE_KEYS.trades, []));
   const [payouts, setPayouts] = useState<PayoutLog[]>(() => loadFromStorage(STORAGE_KEYS.payouts, []));
+
+  const setAccountState: Dispatch<SetStateAction<AccountState>> = (value) => {
+    setRawAccountState((current) => {
+      const next = typeof value === 'function' ? value(current) : value;
+      return promoteEvaluationAccount(next, config);
+    });
+  };
 
   useEffect(() => saveToStorage(STORAGE_KEYS.accountConfig, config), [config]);
   useEffect(() => saveToStorage(STORAGE_KEYS.accountState, accountState), [accountState]);
   useEffect(() => saveToStorage(STORAGE_KEYS.trades, trades), [trades]);
   useEffect(() => saveToStorage(STORAGE_KEYS.payouts, payouts), [payouts]);
+  useEffect(() => {
+    setRawAccountState((current) => promoteEvaluationAccount(current, config));
+  }, [config]);
 
   const paidPayouts = payouts.filter((payout) => payout.status === 'paid').length;
   const dailyStats = useMemo(() => calculateDailyStats(trades, config.dailyMaxLoss), [trades, config.dailyMaxLoss]);
   const weeklyStats = useMemo(() => calculateWeeklyStats(trades, config.weeklyTarget), [trades, config.weeklyTarget]);
   const monthlyStats = useMemo(() => calculateMonthlyStats(trades, config.monthlyTarget, paidPayouts), [trades, config.monthlyTarget, paidPayouts]);
-  const fundedProfit = Math.max(0, accountState.currentBalance - accountState.startingBalance);
+  const fundedProfit = calculatePayoutEligibleProfit(accountState, config);
   const cloudSnapshot = useMemo<CloudSnapshot>(() => ({
     accountConfig: config,
     accountState,
@@ -67,13 +78,13 @@ export function useRiskGuardState() {
   }
 
   function resetAccountStateOnly() {
-    setAccountState({ ...defaultAccountState, startingBalance: config.accountSize, currentBalance: config.accountSize, highWatermark: config.accountSize, dailyStartingBalance: config.accountSize });
+    setRawAccountState({ ...defaultAccountState, startingBalance: config.accountSize, currentBalance: config.accountSize, highWatermark: config.accountSize, dailyStartingBalance: config.accountSize });
   }
 
   function resetAppData() {
     Object.values(STORAGE_KEYS).forEach(removeFromStorage);
     setConfig(defaultAccountConfig);
-    setAccountState(defaultAccountState);
+    setRawAccountState(defaultAccountState);
     setTrades([]);
     setPayouts([]);
   }
@@ -86,8 +97,9 @@ export function useRiskGuardState() {
   }
 
   function applySnapshot(snapshot: CloudSnapshot) {
+    const nextConfig = snapshot.accountConfig ?? config;
     if (snapshot.accountConfig) setConfig(snapshot.accountConfig);
-    if (snapshot.accountState) setAccountState(snapshot.accountState);
+    if (snapshot.accountState) setRawAccountState(promoteEvaluationAccount(snapshot.accountState, nextConfig));
     if (Array.isArray(snapshot.trades)) setTrades(snapshot.trades);
     if (Array.isArray(snapshot.payouts)) setPayouts(snapshot.payouts);
   }

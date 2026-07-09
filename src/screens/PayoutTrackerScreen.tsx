@@ -14,6 +14,7 @@ export function PayoutTrackerScreen(props: Props) {
     payoutPending: props.accountState.payoutPending,
     payoutsTaken: props.monthlyStats.payoutsTaken,
     maxPayouts: props.config.maxPayouts,
+    accountPhase: props.accountState.phase,
     logs: props.payouts
   });
   const remaining = Math.max(0, props.config.maxPayoutAmount - props.fundedProfit);

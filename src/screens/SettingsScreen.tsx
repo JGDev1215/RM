@@ -33,10 +33,11 @@ export function SettingsScreen({ config, setConfig, accountState, setAccountStat
           <NumberInput label="Monthly Target" value={config.monthlyTarget} onChange={(value) => update('monthlyTarget', value)} />
           <NumberInput label="Weekly Target" value={config.weeklyTarget} onChange={(value) => update('weeklyTarget', value)} />
           <NumberInput label="Evaluation Target" value={config.evaluationTarget} onChange={(value) => update('evaluationTarget', value)} />
+          <NumberInput label="Consistency Max" value={config.consistencyThreshold} onChange={(value) => update('consistencyThreshold', value)} />
           <NumberInput label="Max Payouts" value={config.maxPayouts} onChange={(value) => update('maxPayouts', value)} />
           <NumberInput label="Max Payout" value={config.maxPayoutAmount} onChange={(value) => update('maxPayoutAmount', value)} />
           <NumberInput label="Profit Split" value={config.profitSplit} onChange={(value) => update('profitSplit', value)} />
-          <NumberInput label="Balance" value={accountState.currentBalance} onChange={(value) => setAccountState({ ...accountState, currentBalance: value, highWatermark: Math.max(accountState.highWatermark, value), lastUpdated: new Date().toISOString() })} />
+          <NumberInput label="Balance" value={accountState.currentBalance} onChange={(value) => setAccountState({ ...accountState, currentBalance: value, highWatermark: Math.max(accountState.highWatermark, value), highestEndOfDayBalance: Math.max(accountState.highestEndOfDayBalance ?? accountState.startingBalance, value), lastUpdated: new Date().toISOString() })} />
         </div>
         <SegmentedControl label="Account Phase" value={accountState.phase} onChange={(value: AccountPhase) => setAccountState({ ...accountState, phase: value })} options={[{ label: 'Evaluation', value: 'evaluation' }, { label: 'Funded', value: 'funded' }, { label: 'Protection', value: 'payout_protection' }, { label: 'Restart', value: 'restart_required' }]} />
         <SegmentedControl label="Drawdown Type" value={config.drawdownType} onChange={(value: DrawdownType) => update('drawdownType', value)} options={[{ label: 'Fixed', value: 'fixed' }, { label: 'Trailing', value: 'trailing' }, { label: 'EOD', value: 'end_of_day' }]} />

@@ -25,6 +25,7 @@ export function validateAccountConfig(config: AccountConfig): ValidationResult {
   if (!isPositiveNumber(config.maxDrawdown)) errors.push('Max drawdown must be greater than 0.');
   if (!isPositiveNumber(config.dailyMaxLoss)) errors.push('Daily max loss must be greater than 0.');
   if (!isPositiveNumber(config.monthlyTarget)) errors.push('Monthly target must be greater than 0.');
+  if (config.consistencyThreshold <= 0 || config.consistencyThreshold > 1) errors.push('Consistency max must be between 0 and 1.');
   if (config.profitSplit <= 0 || config.profitSplit > 1) errors.push('Profit split must be between 0 and 1.');
   return { valid: errors.length === 0, errors };
 }

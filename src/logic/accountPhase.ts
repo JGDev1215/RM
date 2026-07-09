@@ -15,6 +15,7 @@ export function calculateFundedBaseline(state: AccountState, config: AccountConf
 export function promoteEvaluationAccount(
   state: AccountState,
   config: AccountConfig,
+  consistencyPassing = true,
   now: () => string = () => new Date().toISOString()
 ): AccountState {
   if (isFundedStylePhase(state.phase) && state.fundedBaseline == null) {
@@ -28,6 +29,7 @@ export function promoteEvaluationAccount(
 
   const fundedBaseline = calculateEvaluationPassBalance(state, config);
   if (state.currentBalance < fundedBaseline) return state;
+  if (!consistencyPassing) return state;
   const timestamp = now();
 
   return {

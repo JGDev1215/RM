@@ -3,9 +3,10 @@ import { defaultAccountConfig, defaultAccountState } from '../data/defaults';
 import type { AccountState, RiskContext } from '../data/types';
 import { calculatePayoutEligibleProfit, promoteEvaluationAccount } from './accountPhase';
 import { calculateContractsAllowed, calculatePotentialLoss, calculateRiskPerContract, calculateStopPoints } from './contractSizing';
-import { calculateDrawdownRemaining } from './drawdownLogic';
+import { calculateDrawdownRemaining, calculateDrawdownUsed, calculateEndOfDayDrawdownFloor, calculateEndOfDayTrailBalance } from './drawdownLogic';
 import { calculateNetPayout, calculatePayoutStatus } from './payoutLogic';
 import { buildTradingStatus, calculateDailyRiskRemaining, calculateRecommendedRisk, calculateRiskMode, calculateTradeApproval } from './riskEngine';
+import { calculateConsistencyStats } from './stats';
 
 const baseCtx: RiskContext = {
   accountPhase: 'evaluation',
@@ -13,6 +14,7 @@ const baseCtx: RiskContext = {
   currentBalance: 25000,
   startingBalance: 25000,
   highWatermark: 25000,
+  highestEndOfDayBalance: 25000,
   maxDrawdown: 1000,
   drawdownType: 'fixed',
   dailyMaxLoss: 300,
@@ -129,7 +131,7 @@ describe('Eval-to-funded transition', () => {
 
   it('keeps evaluation accounts below the pass balance out of funded profit', () => {
     const state = makeState(26249.99);
-    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, () => '2026-07-09T12:00:00.000Z');
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, true, () => '2026-07-09T12:00:00.000Z');
 
     expect(promoted.phase).toBe('evaluation');
     expect(calculatePayoutEligibleProfit(promoted, defaultAccountConfig)).toBe(0);
@@ -137,7 +139,7 @@ describe('Eval-to-funded transition', () => {
 
   it('promotes evaluation accounts at the pass balance with no payout-eligible profit yet', () => {
     const state = makeState(26250);
-    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, () => '2026-07-09T12:00:00.000Z');
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, true, () => '2026-07-09T12:00:00.000Z');
 
     expect(promoted.phase).toBe('funded');
     expect(promoted.fundedAt).toBe('2026-07-09T12:00:00.000Z');
@@ -154,7 +156,7 @@ describe('Eval-to-funded transition', () => {
 
   it('records the funded baseline when a balance update crosses the target', () => {
     const state = makeState(26300);
-    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, () => '2026-07-09T12:00:00.000Z');
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, true, () => '2026-07-09T12:00:00.000Z');
 
     expect(promoted.phase).toBe('funded');
     expect(promoted.fundedBaseline).toBe(26250);
@@ -163,7 +165,7 @@ describe('Eval-to-funded transition', () => {
 
   it('does not auto-demote funded accounts that drop below the funded baseline', () => {
     const state = makeState(26100, { phase: 'funded', fundedAt: '2026-07-09T12:00:00.000Z', fundedBaseline: 26250 });
-    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, () => '2026-07-09T13:00:00.000Z');
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, true, () => '2026-07-09T13:00:00.000Z');
 
     expect(promoted.phase).toBe('funded');
     expect(promoted.fundedAt).toBe('2026-07-09T12:00:00.000Z');
@@ -178,10 +180,59 @@ describe('Eval-to-funded transition', () => {
 
   it('backfills missing funded baselines on old funded snapshots', () => {
     const state = makeState(27250, { phase: 'funded' });
-    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, () => '2026-07-09T12:00:00.000Z');
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, true, () => '2026-07-09T12:00:00.000Z');
 
     expect(promoted.fundedBaseline).toBe(26250);
     expect(promoted.fundedAt).toBeUndefined();
     expect(calculatePayoutEligibleProfit(promoted, defaultAccountConfig)).toBe(1000);
+  });
+
+  it('blocks funded promotion when consistency is above 50%', () => {
+    const state = makeState(26250);
+    const promoted = promoteEvaluationAccount(state, defaultAccountConfig, false, () => '2026-07-09T12:00:00.000Z');
+
+    expect(promoted.phase).toBe('evaluation');
+    expect(promoted.fundedBaseline).toBeUndefined();
+  });
+});
+
+describe('LucidFlex EOD drawdown and consistency rules', () => {
+  it('calculates the LucidFlex EOD trail and locked MLL levels', () => {
+    expect(calculateEndOfDayTrailBalance(25000, 1000)).toBe(26100);
+    expect(calculateEndOfDayDrawdownFloor({ startingBalance: 25000, maxDrawdown: 1000, highestEndOfDayBalance: 25000 })).toBe(24000);
+    expect(calculateEndOfDayDrawdownFloor({ startingBalance: 25000, maxDrawdown: 1000, highestEndOfDayBalance: 25400 })).toBe(24400);
+    expect(calculateEndOfDayDrawdownFloor({ startingBalance: 25000, maxDrawdown: 1000, highestEndOfDayBalance: 25200 })).toBe(24200);
+    expect(calculateEndOfDayDrawdownFloor({ startingBalance: 25000, maxDrawdown: 1000, highestEndOfDayBalance: 26100 })).toBe(25100);
+    expect(calculateEndOfDayDrawdownFloor({ startingBalance: 25000, maxDrawdown: 1000, highestEndOfDayBalance: 27250 })).toBe(25100);
+  });
+
+  it('does not let the EOD floor drop after a lower closing balance', () => {
+    const ctx = {
+      ...baseCtx,
+      drawdownType: 'end_of_day' as const,
+      currentBalance: 25200,
+      highestEndOfDayBalance: 25400
+    };
+
+    expect(calculateDrawdownUsed(ctx)).toBe(200);
+    expect(calculateDrawdownRemaining(1000, calculateDrawdownUsed(ctx))).toBe(800);
+  });
+
+  it('locks the EOD floor to the locked MLL balance when payout is pending', () => {
+    expect(calculateEndOfDayDrawdownFloor({ startingBalance: 25000, maxDrawdown: 1000, highestEndOfDayBalance: 25400, payoutPending: true })).toBe(25100);
+  });
+
+  it('calculates Lucid consistency percentage from biggest winning day over total profit', () => {
+    const trades = [
+      { id: '1', date: '2026-07-06', instrument: 'MNQ', direction: 'long', entry: 22000, stop: 21970, exit: 22150, contracts: 1, plannedRisk: 150, actualPnl: 1000, rMultiple: 6.67, result: 'win', createdAt: '2026-07-06T12:00:00.000Z' },
+      { id: '2', date: '2026-07-07', instrument: 'MNQ', direction: 'long', entry: 22000, stop: 21970, exit: 22100, contracts: 1, plannedRisk: 150, actualPnl: 250, rMultiple: 1.67, result: 'win', createdAt: '2026-07-07T12:00:00.000Z' }
+    ] as const;
+
+    const stats = calculateConsistencyStats([...trades], 1250, 0.5);
+
+    expect(stats.largestSingleDayProfit).toBe(1000);
+    expect(stats.consistencyPercentage).toBe(0.8);
+    expect(stats.maxAllowedSingleDayProfit).toBe(625);
+    expect(stats.isPassing).toBe(false);
   });
 });

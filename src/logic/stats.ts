@@ -1,4 +1,4 @@
-import type { DailyStats, MonthlyStats, TradeLog, WeeklyStats } from '../data/types';
+import type { ConsistencyStats, DailyStats, MonthlyStats, TradeLog, WeeklyStats } from '../data/types';
 import { calculateDailyRiskRemaining, calculateMonthlyTargetProgress, calculateWeeklyTargetProgress } from './riskEngine';
 
 function toDateKey(date = new Date()): string {
@@ -60,4 +60,27 @@ export function calculateMonthlyStats(trades: TradeLog[], monthlyTarget: number,
 
 export function hasHighRTradeThisWeek(trades: TradeLog[], date = new Date()): boolean {
   return calculateWeeklyStats(trades, 1, date).hasHighRTrade;
+}
+
+export function calculateConsistencyStats(
+  trades: TradeLog[],
+  accountProfit: number,
+  threshold = 0.5
+): ConsistencyStats {
+  const dailyProfit = trades.reduce<Record<string, number>>((byDate, trade) => {
+    byDate[trade.date] = (byDate[trade.date] ?? 0) + trade.actualPnl;
+    return byDate;
+  }, {});
+  const largestSingleDayProfit = Math.max(0, ...Object.values(dailyProfit));
+  const positiveAccountProfit = Math.max(0, accountProfit);
+  const consistencyPercentage = positiveAccountProfit > 0 ? largestSingleDayProfit / positiveAccountProfit : 0;
+
+  return {
+    accountProfit: positiveAccountProfit,
+    largestSingleDayProfit,
+    consistencyPercentage,
+    maxAllowedSingleDayProfit: positiveAccountProfit * threshold,
+    threshold,
+    isPassing: positiveAccountProfit <= 0 || consistencyPercentage <= threshold
+  };
 }

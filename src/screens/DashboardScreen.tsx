@@ -20,6 +20,7 @@ export function DashboardScreen(props: Props) {
   const recommendedRisk = calculateRecommendedRisk(props.riskContext);
   const drawdownUsed = calculateDrawdownUsed(props.riskContext);
   const drawdownRemaining = calculateDrawdownRemaining(props.config.maxDrawdown, drawdownUsed);
+  const consistency = props.consistencyStats;
   const payoutStatus = calculatePayoutStatus({
     fundedProfit: props.fundedProfit,
     maxPayoutAmount: props.config.maxPayoutAmount,
@@ -54,6 +55,14 @@ export function DashboardScreen(props: Props) {
       <MetricCard label="Drawdown Protection" value={`${formatMoney(drawdownRemaining)} left`} subvalue={`${formatMoney(drawdownUsed)} used of ${formatMoney(props.config.maxDrawdown)}`} progress={drawdownUsed / props.config.maxDrawdown} variant={drawdownRemaining <= 300 ? 'red' : 'amber'} footer={drawdownRemaining < 300 ? 'Drawdown remaining is below $300.' : undefined} />
       <MetricCard label="Recommended Risk" value={formatMoney(recommendedRisk)} subvalue={`${modeLabel(mode)} risk mode`} footer={buildRiskReason(props.riskContext)} variant={modeVariant(mode)} />
       <MetricCard label="Monthly Target" value={formatMoney(props.monthlyStats.pnl)} subvalue={`${percent(props.monthlyStats.targetProgress)} of ${formatMoney(props.config.monthlyTarget)}`} progress={props.monthlyStats.targetProgress} variant={props.monthlyStats.targetProgress >= 0.5 ? 'blue' : 'green'} />
+      <MetricCard
+        label="Consistency Rule"
+        value={percent(consistency.consistencyPercentage)}
+        subvalue={`${formatMoney(consistency.largestSingleDayProfit)} biggest day of ${formatMoney(consistency.accountProfit)} profit`}
+        progress={consistency.consistencyPercentage / consistency.threshold}
+        variant={consistency.isPassing ? 'green' : 'red'}
+        footer={`Must stay at or below ${percent(consistency.threshold)} to upgrade. Max day allowed now: ${formatMoney(consistency.maxAllowedSingleDayProfit)}.`}
+      />
       <Card>
         <div className="row">
           <div>

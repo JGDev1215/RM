@@ -3,6 +3,7 @@ import type { AccountConfig, AccountState } from './types';
 export const defaultAccountConfig: AccountConfig = {
   accountSize: 25000,
   evaluationTarget: 1250,
+  consistencyThreshold: 0.5,
   maxDrawdown: 1000,
   dailyMaxLoss: 300,
   monthlyTarget: 4000,
@@ -23,6 +24,7 @@ export const defaultAccountState: AccountState = {
   startingBalance: 25000,
   currentBalance: 25000,
   highWatermark: 25000,
+  highestEndOfDayBalance: 25000,
   dailyStartingBalance: 25000,
   lastUpdated: new Date().toISOString(),
   payoutPending: false

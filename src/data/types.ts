@@ -22,6 +22,7 @@ export type InstrumentConfig = {
 export type AccountConfig = {
   accountSize: number;
   evaluationTarget: number;
+  consistencyThreshold: number;
   maxDrawdown: number;
   dailyMaxLoss: number;
   monthlyTarget: number;
@@ -39,6 +40,7 @@ export type AccountState = {
   startingBalance: number;
   currentBalance: number;
   highWatermark: number;
+  highestEndOfDayBalance?: number;
   dailyStartingBalance: number;
   lastUpdated: string;
   payoutPending: boolean;
@@ -94,12 +96,22 @@ export type MonthlyStats = {
   payoutsTaken: number;
 };
 
+export type ConsistencyStats = {
+  accountProfit: number;
+  largestSingleDayProfit: number;
+  consistencyPercentage: number;
+  maxAllowedSingleDayProfit: number;
+  threshold: number;
+  isPassing: boolean;
+};
+
 export type RiskContext = {
   accountPhase: AccountPhase;
   accountSize: number;
   currentBalance: number;
   startingBalance: number;
   highWatermark: number;
+  highestEndOfDayBalance?: number;
   maxDrawdown: number;
   drawdownType: DrawdownType;
   dailyMaxLoss: number;
